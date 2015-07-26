@@ -33,12 +33,12 @@
 /* minimum macro */
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
-/* indexes for nibble mask */
+/* indices for nibble mask */
 #define HI_NIBBLE 0
 #define LO_NIBBLE 1
 
 /* read a value with a specific mask, removing trailing zeros. */
-#define read_mask(val, mask) (((val) & (mask)) >> tr_zeros((mask)))
+#define READ_MASK(val, mask) (((val) & (mask)) >> tr_zeros((mask)))
 
 /* binary mask for the bits and nibbles in a byte */
 const uint8_t mask1[] = {128, 64, 32, 16, 8, 4, 2, 1};
@@ -285,7 +285,7 @@ Image open_bitmap(const char *filename)
         fclose(f);
         return image;
     }
-    for (i = 0; i < h->width; ++i)
+    for (i = 0; i < h->height; ++i)
     {
         image.pixel_data[i] = (Pixel*) malloc(h->width * sizeof (Pixel));
         if (!image.pixel_data[i])
@@ -347,7 +347,7 @@ Image open_bitmap(const char *filename)
                 {
                     /* get the right bit from the current byte, 
                      * starting from the most significative one */
-                    image.pixel_data[i][j].i = read_mask(*buf, mask1[bit]);
+                    image.pixel_data[i][j].i = READ_MASK(*buf, mask1[bit]);
                     ++bit;
                     
                     /* when the current byte has been fully read,
@@ -372,11 +372,11 @@ Image open_bitmap(const char *filename)
                 {
                     /* read the two pixels in the current byte */
                     image.pixel_data[i][j].i = 
-                        read_mask(*buf, mask4[HI_NIBBLE]);
+                        READ_MASK(*buf, mask4[HI_NIBBLE]);
 
                     if (j + 1 < h->width)
                         image.pixel_data[i][j + 1].i = 
-                            read_mask(*buf, mask4[LO_NIBBLE]);
+                            READ_MASK(*buf, mask4[LO_NIBBLE]);
 
                     /* advance to the next byte */
                     ++buf;
@@ -405,9 +405,9 @@ Image open_bitmap(const char *filename)
                 for (j = 0; j < h->width; ++j)
                 {
                     uint16_t *px = (uint16_t*) buf;
-                    image.pixel_data[i][j].b = read_mask(*px, h->blue_mask);
-                    image.pixel_data[i][j].g = read_mask(*px, h->green_mask);
-                    image.pixel_data[i][j].r = read_mask(*px, h->red_mask);
+                    image.pixel_data[i][j].b = READ_MASK(*px, h->blue_mask);
+                    image.pixel_data[i][j].g = READ_MASK(*px, h->green_mask);
+                    image.pixel_data[i][j].r = READ_MASK(*px, h->red_mask);
 
                     /* advance to the next pixel (half-word) */
                     buf += 2;
@@ -439,10 +439,10 @@ Image open_bitmap(const char *filename)
                 for (j = 0; j < h->width; ++j)
                 {
                     uint32_t *px = (uint32_t*) buf;
-                    image.pixel_data[i][j].b = read_mask(*px, h->blue_mask);
-                    image.pixel_data[i][j].g = read_mask(*px, h->green_mask);
-                    image.pixel_data[i][j].r = read_mask(*px, h->red_mask);
-                    image.pixel_data[i][j].i = read_mask(*px, h->alpha_mask);
+                    image.pixel_data[i][j].b = READ_MASK(*px, h->blue_mask);
+                    image.pixel_data[i][j].g = READ_MASK(*px, h->green_mask);
+                    image.pixel_data[i][j].r = READ_MASK(*px, h->red_mask);
+                    image.pixel_data[i][j].i = READ_MASK(*px, h->alpha_mask);
 
                     /* advance to the next pixel (word) */
                     buf += 4;;
@@ -768,4 +768,159 @@ char* ascii_print(Image image)
     out[k] = '\0';
 
     return out;
+}
+
+/*!
+ * Get the histogram for a channel.
+ */
+unsigned long* histogram(Image image, const int channel)
+{
+    size_t i, j;
+    unsigned long *hist;
+
+    if (channel < 0 || channel > 3)
+    {
+        fprintf(stderr, "histogram: invalid channel parameter.\n");
+        return NULL;
+    }
+
+    hist = (unsigned long*) calloc(256, sizeof (unsigned long));
+    if (!hist)
+    {
+        fprintf(stderr, "histogram: memory error.\n");
+        return NULL;
+    }
+
+    for (i = 0; i < image.bmp_header.height; ++i)
+        for (j = 0; j < image.bmp_header.width; ++j)
+            /* convert packed struct pointer into an array pointer
+             * to access the channel */
+            hist[((uint8_t*) &image.pixel_data[i][j])[channel]] += 1;
+    
+    return hist; 
+}
+
+/*!
+ * Apply an histogram equalization algorithm.
+ */
+int equalize(Image image, const int channel)
+{
+    size_t i, j;
+    const int li = 256; /* levels in the input image */
+    const int lo = 256; /* levels in output image */
+    unsigned long area = image.bmp_header.width * image.bmp_header.height;
+    const float c = (float) lo / (float) area; /* coefficient */
+    unsigned long cdf[li];        /* cumulative distribution function */
+    unsigned long *h;             /* histogram for the channel */
+
+    if (channel < 0 || channel > 3)
+    {
+        fprintf(stderr, "equalize: invalid channel.\n");
+        return 1;
+    }
+    
+    /* get histogram */
+    h = histogram(image, channel);
+    if (!h)
+    {
+        fprintf(stderr, "equalize: unable to create histogram.\n");
+        return 1;
+    }
+
+    /* compute cdf */
+    cdf[0] = h[0];
+    for (i = 1; i < li; ++i)
+        cdf[i] = cdf[i - 1] + h[i];
+
+    /* equalize */
+    for (i = 0; i < image.bmp_header.height; ++i)
+    {
+        for (j = 0; j < image.bmp_header.width; ++j)
+        {
+            /* convert packed struct pointer into an array pointer
+             * to access the channel */
+            uint8_t *px = (uint8_t*) &image.pixel_data[i][j];
+            px[channel] = c * cdf[px[channel]];
+        }
+    }
+
+    free(h);
+    return 0;
+}
+
+/*!
+ * Convert the RGB color space into Y'CbCr (with Y, Cb and Cr in the range
+ * 0-255), applying the following transformation:
+ * \f[
+ *   Y   = 0.299 \cdot R + 0.587 \cdot G + 0.114 * B \\
+ *   C_b = 128 + 0.564 \cdot (B - Y) \\
+ *   C_r = 128 + 0.713 \cdot (R - Y)
+ * \f]
+ */
+int rgb2ycbcr(Image image)
+{
+    size_t i, j;
+
+    for (i = 0; i < image.bmp_header.height; ++i)
+    {
+        for (j = 0; j < image.bmp_header.width; ++j)
+        {
+            Pixel p = image.pixel_data[i][j];
+            uint8_t y;
+
+            /* Y */
+            image.pixel_data[i][j].b = y =
+                  0.299 * p.r
+                + 0.587 * p.g 
+                + 0.114 * p.b;
+
+            /* Cb */
+            image.pixel_data[i][j].g = 128 + 0.713 * (p.b - y);
+
+            /* Cr */
+            image.pixel_data[i][j].r = 128 + 0.564 * (p.r - y);
+        }
+    }
+    return 0;
+}
+
+/*!
+ * Convert the Y'CbCr color space into RGB, applying the following
+ * transformation:
+ * \f[
+ *   R = Y + 1.403 \cdot (C_r - 128) \\
+ *   G = Y - 0.714 \cdot (C_r - 128) - 0.344 \cdot (C_b - 128) \\
+ *   B = Y + 1.773 \cdot (C_b - 128)
+ * \f]
+ */
+int ycbcr2rgb(Image image)
+{
+    size_t i, j;
+
+    for (i = 0; i < image.bmp_header.height; ++i)
+    {
+        for (j = 0; j < image.bmp_header.width; ++j)
+        {
+            Pixel p = image.pixel_data[i][j];
+
+            /* R */
+            image.pixel_data[i][j].r =
+                  p.b                  /* Y  */
+                + 0                    /* Cb */
+                + 1.402 * (p.r - 128); /* Cr */
+
+            /* G */
+            image.pixel_data[i][j].g =
+                  p.b                    /* Y  */
+                - 0.34414 * (p.g - 128)  /* Cb */
+                - 0.71414 * (p.r - 128); /* Cr */
+
+            /* B */
+            image.pixel_data[i][j].b =
+                  p.b                  /* Y  */
+                + 1.772 * (p.g - 128)  /* Cb */
+                + 0;                   /* Cr */
+        }
+    }
+    return 0;
 }

@@ -26,6 +26,18 @@
 #define __BITMAP_INCLUDED 
 
 #include <stdint.h>
+
+/* Indices for RGB channels */
+#define B 0 /*!< Blue channel index. */
+#define G 1 /*!< Green channel index. */
+#define R 2 /*!< Red channel index. */
+#define A 3 /*!< Alpha channel index. */
+
+/* Indices for YCbCr channels */
+#define Y  0 /*!< Blue channel index. */
+#define Cb 1 /*!< Green channel index. */
+#define Cr 2 /*!< Red channel index. */
+
 /*!
  * \brief Type for a CIE XYZ color.
  */
@@ -111,7 +123,7 @@ typedef struct Pixel
     uint8_t g;
     uint8_t r;
     uint8_t i;
-} Pixel;
+} __attribute__((packed)) Pixel;
 
 /*!
  * \brief Structured type for an image.
@@ -180,5 +192,34 @@ char* bmp_dump(Image image);
  * @return A string containing the ASCII art print.
  */
 char* ascii_print(Image image);
+
+/*!
+ * \brief Get the histogram for a channel.
+ * @param image Image.
+ * @param channel Channel.
+ */
+unsigned long* histogram(Image image, const int channel);
+
+/*!
+ * \brief Apply an histogram equalization algorithm.
+ * @param image Target image.
+ * @param channel Channel to be equalized.
+ * @return Zero on success.
+ */
+int equalize(Image image, const int channel);
+
+/*!
+ * \brief Convert image from RGB to a Y'CbCr color space.
+ * @param image Image to be converted.
+ * @return Zero on success.
+ */
+int rgb2ycbcr(Image image);
+
+/*!
+ * \brief Convert image from Y'CbCr to RGB color space.
+ * @param image Image to be converted.
+ * @return Zero on success.
+ */
+int ycbcr2rgb(Image image);
 
 #endif
