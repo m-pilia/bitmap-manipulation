@@ -222,4 +222,25 @@ int rgb2ycbcr(Image image);
  */
 int ycbcr2rgb(Image image);
 
+/*!
+ * \brief Hide a text message inside a bitmap.
+ * @param image Must be a 16 bit or higher color image.
+ * @param string Text to hide in the bitmap.
+ * @return Zero on success.
+ * @note The maximum length of the text depends on the image size, and it is
+ *       about \f$ \frac{3}{8} \cdot width \cdot length \f$.
+ */
+int steganography_write(Image image, const char *string);
+
+/*!
+ * \brief Read a text message hidden inside a bitmap.
+ * @param image Image containing the message (must be 16 bit or higher).
+ * @return Pointer to a string containing the message, or NULL on failure.
+ * @note If the image does not contain a message, the call may fail or it may
+ *       return a non NULL string full of garbage.
+ * @note The returned string must be manually deallocated when not needed 
+ *       anymore, with stdlib.h's `free(void*)`.
+ */
+char* steganography_read(Image image);
+
 #endif

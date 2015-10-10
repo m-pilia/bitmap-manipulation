@@ -23,22 +23,47 @@
  */
 
 #include <assert.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "bitmap.h"
 
-/* minimum macro */
+/* Minimum macro. */
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
-/* indices for nibble mask */
+/* Indices for nibble mask. */
 #define HI_NIBBLE 0
 #define LO_NIBBLE 1
 
-/* read a value with a specific mask, removing trailing zeros. */
+/* Read a value with a specific mask, removing trailing zeros. */
 #define READ_MASK(val, mask) (((val) & (mask)) >> tr_zeros((mask)))
+
+/* Length in bit for the string length encode in the steganographic 
+ * functions. */ 
+#define STEG_LEN 32
+
+/* Update indices while reading channels of various pixels sequentially;
+ * i is the pixel row, j the pixel column, ch the channel no. and w the width;
+ * pixels are read by row, and for each pixel the first three channels are
+ * read sequentially. */
+#define NEXT(i, j, ch, w)   \
+    if ((ch) + 1 == 3)      \
+    {                       \
+        (ch) = 0;           \
+        if ((j) + 1 == (w)) \
+        {                   \
+            (j) = 0;        \
+            ++(i);          \
+        }                   \
+        else                \
+            ++(j);          \
+    }                       \
+    else                    \
+        ++(ch);
 
 /* binary mask for the bits and nibbles in a byte */
 const uint8_t mask1[] = {128, 64, 32, 16, 8, 4, 2, 1};
@@ -923,4 +948,141 @@ int ycbcr2rgb(Image image)
         }
     }
     return 0;
+}
+
+/*!
+ * Write an hidden text message inside a bitmap. Each color channel of each 
+ * pixel holds a bit of the message; pixels are read from bottom left to top 
+ * right, while channels for each pixel are read from B to R. The bits of
+ * the characters or numbers are written in little endian order.
+ *
+ * The value of each channel is zero if its value is even, one if it is odd.
+ * The evenness of the values is manipulated to encode the message while doing
+ * only a quasi invisible change to the image aspect.
+ *
+ * A bitmap of size \f$ width \cdot height \f$ can hold 
+ * \f$ 3 \cdot width \cdot height \f$ bits of data. The first 32 bits are used
+ * to encode the length of the payload message. Then the message follows, and
+ * the eventual exceeding channels are filled with random data.
+ */
+int steganography_write(Image image, const char *string)
+{
+    Bmp_header *h = &image.bmp_header;
+    size_t len = strlen(string) + 1; /* include termination character */
+    size_t allowed_len = (h->width * h->height * 3 - STEG_LEN) / CHAR_BIT;
+    unsigned long i, j, k, l, ch;
+    uint8_t *px;
+
+    if (len > allowed_len)
+    {
+        fprintf(stderr,
+                "steganography_write: the input string is too long, "
+                "the maximum allowed string length for this image is %ld\n",
+                allowed_len);
+        return 1;
+    }
+
+    if (h->bit_per_pixel < 16)
+    {
+        fprintf(stderr, 
+                "steganography_write: only 16 bit or higher bpp images"
+                "allowed\n");
+        return 1;
+    }
+
+    /* write len in the first STEG_LEN pixels */
+    /* even = zero, odd = 1 */
+    i = j = ch = 0;
+    for (k = 0; k < STEG_LEN; ++k)
+    {
+        px = (uint8_t*) &image.pixel_data[i][j];
+        if (px[ch] == 255)
+            --px[ch]; /* prevent overflow */
+        px[ch] += (px[ch] % 2 + ((len >> k) & 0x1)) % 2;
+        NEXT(i, j, ch, h->width);
+    }
+
+    /* write the actual string (l-th pixel of k-th character) following */
+    for (k = 0; k < len; ++k)
+    {
+        for (l = 0; l < CHAR_BIT; ++l)
+        {
+            px = (uint8_t*) &image.pixel_data[i][j];
+            if (px[ch] == 255)
+                --px[ch]; /* prevent overflow */
+            px[ch] += (px[ch] % 2 + ((string[k] >> l) & 0x1)) % 2;
+            NEXT(i, j, ch, h->width);
+        }
+    }
+
+    /* fill the rest of the image with random data */
+    srand(time(NULL));
+    while (i < h->height)
+    {
+        px = (uint8_t*) &image.pixel_data[i][j];
+        if (px[ch] == 255)
+            --px[ch]; /* prevent overflow */
+        px[ch] += rand() % 2;
+        NEXT(i, j, ch, h->width);
+    }
+
+    return 0;
+}
+
+/*!
+ * Read the hidden message inside an image. Read the length of the encoded
+ * message first, and read the message if it is valid. If the bitmap does not
+ * actually contain an hidden message, the read can fail on the length check,
+ * or maybe the operation may prosecute and return a string filled with
+ * garbage. The user must be sure that the image under reading actually  
+ * contains a valid message encoded.
+ */
+char* steganography_read(Image image)
+{
+    Bmp_header *h = &image.bmp_header;
+    size_t allowed_len = (h->width * h->height * 3 - STEG_LEN) / CHAR_BIT;
+    unsigned long i, j, k, l, ch;
+    size_t len = 0;
+    uint8_t *px;
+    char *res;
+
+    if (h->bit_per_pixel < 16)
+    {
+        fprintf(stderr, 
+                "steganography_read: only 16 bit or higher bpp images"
+                "allowed\n");
+        return NULL;
+    }
+    
+    /* read the string length (inclusive of termination character) */
+    i = j = ch = 0;
+    for (k = 0; k < STEG_LEN; ++k)
+    {
+        px = (uint8_t*) &image.pixel_data[i][j];
+        len += (uint32_t) (px[ch] % 2) << k;
+        NEXT(i, j, ch, h->width);
+    }
+
+    /* ensure the string length is valid */
+    if (len > allowed_len)
+    {
+        fprintf(stderr, 
+                "steganography_read: invalid string length read, probably"
+                "the image does not contain a message.\n");
+        return NULL;
+    }
+
+    /* read the message */
+    res = (char*) calloc(len, sizeof (char));
+    for (k = 0; k < len; ++k)
+    {
+        for (l = 0; l < CHAR_BIT; ++l)
+        {
+            px = (uint8_t*) &image.pixel_data[i][j];
+            res[k] += (uint8_t) (px[ch] % 2) << l;
+            NEXT(i, j, ch, h->width);
+        }
+    }
+
+    return res;
 }

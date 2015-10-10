@@ -53,5 +53,18 @@ int main(void)
     /* destroy object */
     destroy_image(&image);
     
+    
+    
+    /* open image */
+    image = open_bitmap("./test_images/24bit.bmp");
+    /* hide a message in the image */
+    steganography_write(image, "this is an hidden message");
+    /* save */
+    save_bitmap(image, "./test.bmp");
+    /* read the hidden message */
+    printf("Hidden message: \"%s\"\n", steganography_read(image));
+    /* destroy object */
+    destroy_image(&image);
+    
     return 0;
 }
